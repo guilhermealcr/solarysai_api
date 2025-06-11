@@ -121,3 +121,19 @@ class SugestaoAICreate(SugestaoAIBase):
 class SugestaoAI(SugestaoAIBase):
     SugestaoID: int
     class Config: from_attributes = True
+
+# --- PREVISÃO AI ---
+
+# Schema para os dados que a API recebe para fazer uma previsão
+# Note que são as features que nosso modelo usou para treinar
+class TarefaPredictionInput(BaseModel):
+    DuracaoPrevista: int
+    StatusProjeto: str
+    MesInicioPrevisto: int
+    DiaDaSemanaInicioPrevisto: int
+    DiferencaDuracao: int
+
+# Schema para a resposta da previsão
+class PredictionOutput(BaseModel):
+    previsao: str
+    probabilidade_de_atraso: float

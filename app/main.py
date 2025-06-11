@@ -1,12 +1,12 @@
-# Arquivo: solarys_api/app/main.py
-# VERSÃO FINALÍSSIMA COM CRUD COMPLETO PARA TODAS AS TABELAS
-
 from fastapi import FastAPI, HTTPException, status, Depends
 import pyodbc
 from typing import List
 
 from . import schemas
 from .database import get_db_connection
+import joblib
+import json
+import pandas as pd
 
 app = FastAPI(
     title="SolarysAI API",
@@ -18,12 +18,92 @@ app = FastAPI(
 DbConnection = Depends(get_db_connection)
 
 @app.get("/", tags=["Root"])
+
 def read_root():
     return {"message": "Bem-vindo à API SolarysAI"}
 
 # --------------------------------------------------------------------------
 # --- ENDPOINTS PARA PROJETOS ---
 # --------------------------------------------------------------------------
+# --- CARREGAMENTO DO MODELO DE IA ---
+# O modelo e as colunas são carregados UMA VEZ quando a API inicia.
+try:
+    print("Carregando modelo de IA e colunas...")
+    modelo_ia = joblib.load('modelo_atraso_v1.joblib')
+    with open('colunas_modelo_v1.json', 'r') as f:
+        colunas_modelo = json.load(f)
+    print("Modelo e colunas carregados com sucesso!")
+except FileNotFoundError:
+    print("ERRO: Arquivos do modelo não encontrados. Execute o notebook de treinamento primeiro.")
+    modelo_ia = None
+    colunas_modelo = None
+# ------------------------------------
+
+
+app = FastAPI(
+    title="SolarysAI API",
+    description="API para gerenciar dados de construção civil e fornecer insights de IA.",
+    version="1.0.0"
+)
+
+# Alias para a nossa função de conexão
+DbConnection = Depends(get_db_connection)
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Bem-vindo à API SolarysAI com IA integrada!"}
+
+
+# --------------------------------------------------------------------------
+# --- ENDPOINT DE PREVISÃO DA IA ---
+# --------------------------------------------------------------------------
+
+@app.post("/prever/tarefa-atraso/", response_model=schemas.PredictionOutput, tags=["Inteligência Artificial"])
+def prever_atraso_tarefa(dados_tarefa: schemas.TarefaPredictionInput):
+
+    if not modelo_ia or not colunas_modelo:
+        raise HTTPException(status_code=500, detail="Modelo de IA não está carregado no servidor.")
+
+    # 1. Converter os dados de entrada em um DataFrame do Pandas
+    dados_dict = dados_tarefa.dict()
+    df_para_prever = pd.DataFrame([dados_dict])
+
+    # 2. Fazer o One-Hot Encoding das variáveis categóricas
+    #    Isso garante que os dados de entrada tenham o mesmo formato dos dados de treino.
+    df_para_prever_encoded = pd.get_dummies(df_para_prever)
+    
+    # 3. Alinhar as colunas com as colunas originais do modelo
+    #    Isso cria colunas de '0' para categorias que não estavam nesta entrada, mas que o modelo espera.
+    df_alinhado = df_para_prever_encoded.reindex(columns=colunas_modelo, fill_value=0)
+
+    # 4. Fazer a previsão de probabilidade
+    #    predict_proba retorna a probabilidade para cada classe: [prob_no_prazo, prob_atrasada]
+    probabilidades = modelo_ia.predict_proba(df_alinhado)[0]
+    
+    probabilidade_de_atraso = probabilidades[1] # Pegamos a probabilidade da classe '1' (Atrasada)
+
+    # 5. Definir a previsão final
+    previsao_texto = "Atrasada" if probabilidade_de_atraso > 0.5 else "No Prazo"
+    
+    return {
+        "previsao": previsao_texto,
+        "probabilidade_de_atraso": probabilidade_de_atraso
+    }
+
+
+# --------------------------------------------------------------------------
+# --- Endpoints de CRUD (O código anterior completo vai aqui) ---
+# (Cole aqui todos os endpoints de CRUD para Projetos, Tarefas, etc. que já fizemos)
+# --------------------------------------------------------------------------
+@app.get("/projetos/", response_model=List[schemas.Projeto], tags=["Projetos"])
+def get_projetos(db: pyodbc.Connection = DbConnection):
+    # seu código aqui...
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM Projetos")
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+# (E assim por diante para TODOS os outros endpoints que você já tem)
 
 @app.post("/projetos/", response_model=schemas.Projeto, status_code=status.HTTP_201_CREATED, tags=["Projetos"])
 def create_projeto(projeto: schemas.ProjetoCreate, db: pyodbc.Connection = DbConnection):
@@ -196,3 +276,4 @@ def update_alocacao(alocacao_id: int, alocacao_update: schemas.AlocacaoFuncionar
         raise HTTPException(status_code=404, detail="Alocação não encontrada para atualização.")
     db.commit()
     return schemas.AlocacaoFuncionario(AlocacaoID=alocacao_id, **alocacao_update.dict())
+
